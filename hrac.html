@@ -390,7 +390,7 @@ function cleanup() {
   try { if (p) p.destroy(); } catch (e) { /* nic */ }
 }
 function lost() {
-  if (ME.retryT) return;
+  if (ME.retryT || ME.kicked) return;
   if (ME.ph !== 'notv') setPh('lost');
   render();
   ME.retryT = setTimeout(() => { ME.retryT = 0; connect(); }, ME.ph === 'notv' ? 4000 : 1500);
@@ -398,8 +398,10 @@ function lost() {
 function send(m) { try { if (ME.conn && ME.conn.open) { ME.conn.send(m); ME.sentAt = performance.now(); } } catch (e) { /* padá spojení */ } }
 function onMsg(m) {
   if (!m || typeof m !== 'object') return;
+  ME.lastMsg = performance.now();
   if (m.t === 'you') { you(m.i); setPh('game'); render(); }
   else if (m.t === 'full') { setPh('full'); render(); }
+  else if (m.t === 'kick') { ME.kicked = true; setPh('kicked'); cleanup(); buzz('ztrata'); render(); }   // dlouho bez dotyku: místo uvolněno pro jiné
   else if (m.t === 'st') { ME.st = m; if (ME.ph !== 'game' && ME.i >= 0 && m.s[ME.i]) setPh('game'); render(); }
   else if (m.t === 'snd') { ME.nsnd = (ME.nsnd || 0) + 1; if (ME.snd) Zvuk.play(m.n, m.a, m.b); }
   else if (m.t === 'fx') buzz(m.k);
@@ -426,6 +428,7 @@ function render() {
   if (ph === 'conn') line = 'Připojuji se ke hře…';
   else if (ph === 'lost') line = 'Spojení vypadlo. Připojuji znovu…';
   else if (ph === 'notv') line = 'Hra na obrazovce teď neběží. Zkouším to znovu.';
+  else if (ph === 'kicked') line = 'Ovladač byl dlouho v klidu, tak se tvůj pastýř uvolnil pro jiné. Klepni kamkoli a připojíš se znovu.';
   else if (ph === 'full') line = 'Všichni čtyři pastýři už mají hráče. Jakmile se jeden uvolní, přidáš se.';
   else if (!st || !me) line = 'Připojuji se ke hře…';
   else {
@@ -534,6 +537,7 @@ function flower(x, y, r, rot) {
   g.fillStyle = '#1d2f5b'; g.beginPath(); g.arc(x, y, r * 0.14, 0, Math.PI * 2); g.fill();
 }
 cv.addEventListener('pointerdown', e => {
+  if (ME.kicked) { ME.kicked = false; connect(); return; }
   unlock();
   if (J.id !== null) return;
   J.id = e.pointerId; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* nic */ }
@@ -554,6 +558,7 @@ function move(e) {
 function sendIn() { send({ t: 'in', x: +J.x.toFixed(3), y: +J.y.toFixed(3) }); }
 setInterval(() => {                                                 // joystick 20× za s, jinak „jsem tu“ každou sekundu
   if (J.on) sendIn(); else if (performance.now() - ME.sentAt > 1000) send({ t: 'hb' });
+  if (ME.ph === 'game' && !PREVIEW && performance.now() - (ME.lastMsg || 0) > 6000) { cleanup(); lost(); }   // televize zmlkla (vypnutá, bez internetu)
 }, 50);
 
 // ------------------------------------------------------------ zvuk, vibrace, nezhasínání
@@ -584,7 +589,7 @@ function keepAwake() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || PREVIEW) return;
   keepAwake(); Zvuk.resume();
-  if (!(ME.conn && ME.conn.open)) connect();                        // po odemčení mobilu hned znovu připojit
+  if (!(ME.conn && ME.conn.open) && !ME.kicked) connect();          // po odemčení mobilu hned znovu připojit
 });
 document.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('hashchange', () => location.reload());

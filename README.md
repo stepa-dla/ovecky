@@ -23,11 +23,19 @@ Stránky jsou samostatné, nepotřebují žádný server. Mobil a televize se sp
 
 Otevři `https://<tvé-jméno>.github.io/betlem/tisk.html` a dej *Vytisknout* (A4, velikost 100 %). Kód vede na `hrac.html`. Televize má pevné ID zapsané přímo ve stránce, takže vytištěný kód platí trvale, i po restartu nebo na jiné televizi.
 
-Hru nech běžet jen v jednom okně. Když je `index.html` otevřený současně na dvou místech (třeba na televizi a na počítači), druhé okno čeká, dokud se první nezavře.
+Hru s klíčem hraje vždy ta obrazovka, kterou otevřeš naposled. Když ji otevřeš na televizi a předtím jsi ji zkoušel na počítači, televize si ji do zhruba čtvrt minuty převezme a na počítači se ukáže „Hra se přesunula na jinou obrazovku“.
+
+**Když hra nejde:** podívej se do levého dolního rohu televize. Když je roh prázdný, je všechno v pořádku. Jinak tam je napsáno proč:
+- **„Ukázka – tahle obrazovka nemá klíč“:** otevři jednou adresu s `?klic=…`.
+- **„Místo drží jiné okno nebo předchozí spojení“:** počkej, převzetí obvykle trvá do minuty.
+- **„Čekám na připojení k serveru“:** nejde internet, nebo neodpovídá server PeerJS (stav: status.peerjs.com).
+
+Klávesa H ukáže i podrobný stav.
 
 ## Spuštění na televizi
 
-- V prohlížeči televize (nebo počítače připojeného k televizi) otevři adresu z bodu 4.
+- V prohlížeči televize (nebo počítače připojeného k televizi) otevři adresu z bodu 4 **jednou s klíčem**: `…/betlem/?klic=TVŮJ-KLÍČ`. Televize si klíč zapamatuje a z adresy ho skryje. Příště stačí adresa bez klíče.
+- Bez klíče se stránka ukáže jen jako ukázka a mobily se k ní nepřipojí. Kdo cizí otevře stránku hry, výlohu tím nepřebere, ani když televize zrovna vypadne. Klíč není ve zdrojích na GitHubu, je tam jen jeho otisk.
 - **Celá obrazovka:** klávesa F nebo Enter (případně tlačítko OK na dálkovém ovladači).
 - **Klávesy:** N noc/sníh · V chumelenice · W vlk · C hvězda · K konec kola · Z zvuk i z televize · H nápověda.
 - **Světlo a stíny** počítá grafická karta (WebGL): měsíc od hvězdy, oheň, lucerny, světlo z chléva, lucerničky pastýřů a měkké vržené stíny. Klávesa L je vypne nebo zapne. Na slabém zařízení se samy vypnou a hra běží v plochém tisku.
@@ -39,7 +47,8 @@ Hru nech běžet jen v jednom okně. Když je `index.html` otevřený současně
 3. Pastýři ženou stádo vrátky do ohrady s chlévem. Body má celý tým: ovečka 1, černá ovečka 3, zahnaný vlk 2. Překážky na louce (seno, balvany, sněhulák, sáně, studna, zídky) jsou v každém kole jinde.
 4. Vlci se plíží k osamělým ovečkám, později v kole chodí ve dvojici. Pastýř musí dojít až k vlkovi, jinak odnese ovečku do lesa. Když vlk přijde, všechny mobily zavyjí a na Androidu zavibrují.
 5. Kdo přijde během kola, převezme volného pastýře. Kdo se 12 s nedotkne ovladače, toho pastýře na chvíli vede počítač. Stačí se dotknout a řídí zase hráč.
-6. Po kole dají hráči **Hrát znovu**. Když všichni odejdou, televize se vrátí k ukázce.
+6. Kdo se 90 s nedotkne ovladače, toho televize odpojí a uvolní jeho pastýře, třeba když odešel s otevřenou stránkou nebo se připojil z domova. Na mobilu stačí klepnout a připojí se znovu.
+7. Po kole dají hráči **Hrát znovu**. Když všichni odejdou, televize se vrátí k ukázce.
 
 **Zvuk:** hudbu a společné zvuky hraje jeden mobil. Každý mobil navíc slyší „své“ ovečky a zvonek, když jeho ovečka vejde do ohrady. Zvuk se zapne prvním dotykem. Na Androidu mobil i vibruje.
 

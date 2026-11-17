@@ -55,6 +55,7 @@ canvas#cv.ui { background: transparent; }
         <dt>H</dt><dd>Tahle nápověda</dd>
       </dl>
       <p>Hráči naskenují vytištěný QR kód, mobil se stane ovladačem pastýře. Až dají všichni „připraven“, kolo začne. Volné pastýře vede počítač. Zvuk a hudba hrají z mobilů.</p>
+      <p id="stav"></p>
       <p>Volby v adrese: <code>?cas=120</code> délka kola v sekundách, <code>?snih</code> zasněžená paleta, <code>?zvuk</code> zvuk i z televize, <code>?bezvlku</code> bez vlků. QR kód k vytištění je na stránce <code>tisk.html</code>.</p>
     </div>
   </div>
@@ -1248,6 +1249,7 @@ const PL = { slot: [null, null, null, null], wait: [], prev: {}, peer: null, id:
 const HUMAN_V = clamp(+Q.get('rychlost') || 250, 100, 500);       // rychlost pastýře hráče (mm/s); AI chodí 175
 const IDLE_AI = 12;                                                // s bez dotyku → pastýře během kola vede AI
 const plCount = () => PL.slot.filter(Boolean).length;
+const dbg = (...a) => { if (Q.has('ladit')) console.log('[betlem]', ...a); };
 function isHuman(i) {
   const p = PL.slot[i]; if (!p) return false;
   if (G.mode === 'play' && clk() - p.moved > IDLE_AI) return false;
@@ -1271,11 +1273,42 @@ function startPeer() {
   peer.on('close', () => { PL.open = false; });
   peer.on('error', e => {
     PL.err = e && e.type || 'chyba';
-    if (PL.err === 'unavailable-id') peer.destroy();             // ID ještě drží předchozí okno (po obnovení stránky) → za chvíli znovu
+    if (PL.err === 'unavailable-id') {                                // ID drží jiné okno (nebo server ještě drží staré spojení) → převzít
+      peer.destroy();
+      if (clk() - (PL.yieldedAt || -99) < 15) setTimeout(() => { if (PL.host && (!PL.peer || PL.peer.destroyed)) startPeer(); }, 1000);   // staré okno už pustilo, server to za chvilku pozná
+      else takeOver();
+    }
     sideUpdate(true);
   });
 }
+/** ID drží jiné okno: když je to naše televize s klíčem, požádáme ji, ať ho pustí (výzva + otisk klíče, klíč se neposílá). */
+function takeOver() {
+  if (PL.taking) return; PL.taking = true;
+  let tmp; try { tmp = new Peer(undefined, peerOpts()); } catch (e) { PL.taking = false; return; }
+  const done = () => { PL.taking = false; try { tmp.destroy(); } catch (e) { /* nic */ } };
+  const timer = setTimeout(done, 25000);                                     // nikdo neodpověděl: server drží mrtvé spojení, za chvíli ho pustí
+  dbg('převzetí: start');
+  tmp.on('open', () => {
+    dbg('převzetí: dočasné spojení se serverem');
+    const c = tmp.connect(PL.id, { serialization: 'json', reliable: true });
+    c.on('open', () => { dbg('převzetí: spojeno se starým oknem'); c.send({ t: 'yield?' }); });
+    c.on('error', e => dbg('převzetí: chyba spojení', e && e.type));
+    c.on('data', async m => {
+      dbg('převzetí: zpráva', m && m.t);
+      if (m && m.t === 'nonce' && typeof m.n === 'string') c.send({ t: 'yield', h: await sha256hex(PL.key + m.n) });
+      else if (m && m.t === 'yielded') { clearTimeout(timer); PL.yieldedAt = clk(); setTimeout(() => { done(); startPeer(); }, 600); }
+    });
+  });
+  tmp.on('error', e => { dbg('převzetí: chyba', e && e.type); clearTimeout(timer); done(); });
+}
+function yieldHost() {                                                       // jiná obrazovka s klíčem převzala hru
+  PL.host = false; PL.err = 'moved';
+  PL.slot.forEach((p, i) => { if (p) freeSlot(i); });
+  try { PL.peer.destroy(); } catch (e) { /* nic */ }
+  PL.open = false; sideUpdate(true);
+}
 function peerWatch() {                                             // hlídač spojení se zprostředkovatelem (síť vypadla, server restart)
+  if (!PL.host) return;
   const p = PL.peer;
   if (!p || p.destroyed) startPeer();
   else if (p.disconnected) { try { p.reconnect(); } catch (e) { startPeer(); } }
@@ -1290,12 +1323,15 @@ function onMsg(conn, m) {
   if (!m || typeof m !== 'object') return;
   const now = clk();
   if (m.t === 'hello') { conn.cid = String(m.cid || conn.peer).slice(0, 40); hello(conn, now); return; }
+  if (m.t === 'yield?' || m.t === 'yield') dbg('žádost o převzetí', m.t, 'host', PL.host);
+  if (m.t === 'yield?' && PL.host) { conn.nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); send(conn, { t: 'nonce', n: conn.nonce }); return; }
+  if (m.t === 'yield' && conn.nonce && PL.host) { const n = conn.nonce; conn.nonce = null; sha256hex(PL.key + n).then(h => { if (h === m.h) { send(conn, { t: 'yielded' }); setTimeout(yieldHost, 300); } }); return; }
   const i = PL.slot.findIndex(p => p && p.conn === conn); if (i < 0) return;
   const p = PL.slot[i]; p.last = now;
   if (m.t === 'in') {
     p.jx = clamp(+m.x || 0, -1, 1); p.jy = clamp(+m.y || 0, -1, 1); p.inAt = now;
     if (Math.hypot(p.jx, p.jy) > 0.15) { if (now - p.moved > IDLE_AI) PL.dirty = true; p.moved = now; }
-  } else if (m.t === 'ready') { p.ready = !!m.on; PL.dirty = true; }
+  } else if (m.t === 'ready') { p.ready = !!m.on; p.moved = now; PL.dirty = true; }
   else if (m.t === 'audio') { p.audio = !!m.on; pickSpeaker(); }
 }
 function hello(conn, now) {
@@ -1369,6 +1405,7 @@ function startGame(now) {
 function plUpdate(now) {
   if (now - (PL.watchAt || 0) > 5) { PL.watchAt = now; peerWatch(); }
   PL.slot.forEach((p, i) => { if (p && now - p.last > 10) freeSlot(i); });   // mobil zhasl nebo odešel → pastýře převezme AI
+  PL.slot.forEach((p, i) => { if (p && now - p.moved > KICK_IDLE) { send(p.conn, { t: 'kick' }); setTimeout(() => { if (PL.slot[i] === p) freeSlot(i); }, 300); p.moved = now; } });   // nečinný (nebo vzdálený) hráč uvolní místo
   if (!plDemo()) {
     if (G.mode === 'attract') lobbyCheck(now);
     else if (G.mode === 'results' && elapsed() > 10) { releaseAll(); setMode('attract'); PL.dirty = true; }
@@ -1414,15 +1451,53 @@ function startSub(i) {                                                       // 
 }
 function sideUpdate() {                                                     // jen stav spojení (malý nápis v rohu, když něco nejde)
   PL.sideAt = clk();
-  const net = PL.open ? '' : PL.err === 'unavailable-id' ? 'Hra už běží v jiném okně nebo na jiné obrazovce. Zkouším to znovu.' : PL.err ? 'Čekám na připojení k internetu…' : 'Připojuji se…';
+  const net = !PL.host
+    ? (PL.err === 'klic' ? 'Neplatný klíč – jen ukázka.' : PL.err === 'moved' ? 'Hra se přesunula na jinou obrazovku. Tady už jen ukázka.' : 'Ukázka – tahle obrazovka nemá klíč, mobily se k ní nepřipojí.')
+    : PL.open ? '' : PL.err === 'unavailable-id' ? 'Místo drží jiné okno nebo předchozí spojení. Přebírám ho, obvykle do minuty…' : PL.err ? 'Čekám na připojení k serveru…' : 'Připojuji se…';
   const e = $('net'); if (e && e.textContent !== net) e.textContent = net;
+  const st = $('stav');                                                       // stav v nápovědě (klávesa H)
+  if (st) st.textContent = `Stav: klíč ${PL.host ? 'ano' : 'ne'}, server ${PL.open ? 'připojeno' : 'nepřipojeno'}${PL.err ? ' (' + PL.err + ')' : ''}, hráči ${plCount()}, ID ${PL.id || '–'}.`;
 }
-function plStart() {
+const KICK_IDLE = clamp(+Q.get('necinnost') || 90, 5, 600);              // s bez dotyku ovladače → odpojit
+/** Hra se přihlásí jako televize jen s klíčem (?klic=…, pak si ho pamatuje). Bez klíče jen ukázka – mobily se k ní nepřipojí. */
+/** SHA-256 v JS – pro starší prohlížeče (chytré televize) bez crypto.subtle. */
+function sha256js(str) {
+  const rr = (v, a) => (v >>> a) | (v << (32 - a)), b = Array.from(unescape(encodeURIComponent(str)), c => c.charCodeAt(0));
+  const K = [], H0 = [];
+  for (let n = 2, i = 0; i < 64; n++) { let pr = true; for (let d = 2; d * d <= n; d++) if (n % d === 0) { pr = false; break; } if (pr) { if (i < 8) H0[i] = (Math.pow(n, 1 / 2) * 4294967296) | 0; K[i++] = (Math.pow(n, 1 / 3) * 4294967296) | 0; } }
+  const l = b.length * 8; b.push(0x80); while (b.length % 64 !== 56) b.push(0);
+  for (let i = 7; i >= 0; i--) b.push(i >= 4 ? 0 : (l >>> (i * 8)) & 255);
+  let Hs = H0.slice(); const w = new Array(64);
+  for (let j = 0; j < b.length; j += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (b[j + 4 * i] << 24) | (b[j + 4 * i + 1] << 16) | (b[j + 4 * i + 2] << 8) | b[j + 4 * i + 3];
+    for (let i = 16; i < 64; i++) { const s0 = rr(w[i - 15], 7) ^ rr(w[i - 15], 18) ^ (w[i - 15] >>> 3), s1 = rr(w[i - 2], 17) ^ rr(w[i - 2], 19) ^ (w[i - 2] >>> 10); w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0; }
+    let [a, bb, c, d, e, f, g, h] = Hs;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0, t2 = ((rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = bb; bb = a; a = (t1 + t2) | 0;
+    }
+    Hs = [a, bb, c, d, e, f, g, h].map((v, i) => (v + Hs[i]) | 0);
+  }
+  return Hs.map(v => (v >>> 0).toString(16).padStart(8, '0')).join('');
+}
+async function sha256hex(str) {
+  try { if (window.crypto && crypto.subtle) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)); return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join(''); } } catch (e) { /* níž v JS */ }
+  return sha256js(str);
+}
+async function keyOk(k) { return (await sha256hex(k)) === '07c08990523385425a8ee3667899f695f3f6826d2b467e83f903597c5adbb0e6'; }
+async function plStart() {
+  PL.host = false;
+  let k = Q.get('klic'); if (!k) { try { k = localStorage.getItem('betlem_klic'); } catch (e) { /* bez úložiště */ } }
+  if (k && await keyOk(k)) {
+    PL.host = true; PL.key = k;
+    try { localStorage.setItem('betlem_klic', k); } catch (e) { /* bez úložiště */ }
+    if (Q.get('klic')) { const u = new URL(location.href); u.searchParams.delete('klic'); history.replaceState(null, '', u.href); }   // klíč nezůstane vidět v adrese
+  } else if (Q.get('klic')) PL.err = 'klic';
   PL.id = tvId();
   try { PL.prev = JSON.parse(sessionStorage.getItem('betlem_prev') || '{}') || {}; } catch (e) { PL.prev = {}; }   // po obnovení stránky dostane každý mobil zpět svého pastýře
   const u = new URL('hrac.html', location.href); u.search = Q.get('peer') ? '?peer=' + encodeURIComponent(Q.get('peer')) : ''; if (Q.get('id')) u.hash = PL.id;
   PL.joinUrl = u.href;
-  startPeer();
+  if (PL.host) startPeer();
   sideUpdate(true);
 }
 
